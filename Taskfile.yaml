@@ -1,0 +1,10 @@
+# https://taskfile.dev
+
+version: '3'
+
+tasks:
+  build:demo:
+    dir: demo
+    cmds:
+      - rm -rf ../bin/demo
+      - go build -o ../bin/queue-demo *.go

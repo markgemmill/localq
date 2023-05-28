@@ -1,0 +1,6 @@
+[dover]
+version = "0.1.0"
+version_format = "000-A.0"
+versioned_files = [
+    ".dover:1"
+]
