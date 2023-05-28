@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path"
@@ -98,4 +99,17 @@ func (q *Queue) RunAllTasks(runId int) {
 	if err != nil {
 		fmt.Println(err)
 	}
+}
+
+func ReadTaskFile[T any](filePath string) (T, error) {
+	var opts T
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return opts, err
+	}
+	err = json.Unmarshal(content, &opts)
+	if err != nil {
+		return opts, err
+	}
+	return opts, nil
 }

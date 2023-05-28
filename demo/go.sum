@@ -1,2 +1,4 @@
 github.com/alecthomas/kong v0.7.0 h1:YIjJUiR7AcmHxL87UlbPn0gyIGwl4+nYND0OQ4ojP7k=
 github.com/alecthomas/kong v0.7.0/go.mod h1:n1iCIO2xS46oE8ZfYCNDqdR0b0wZNrXAIAqro/2132U=
+github.com/markgemmill/localq v0.0.0-20230528203807-ae38cf50d523 h1:h0u3UUoG5hRl0R7qGsU5psr4MXGXmVDdXJTfZbiQtBs=
+github.com/markgemmill/localq v0.0.0-20230528203807-ae38cf50d523/go.mod h1:bpCANYVrwsjdP6il7EfOylPn+AMyKivXtV0AYkLWPLY=
