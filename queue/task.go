@@ -3,203 +3,232 @@ package queue
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/google/uuid"
-	"io/fs"
-	"os"
-	"path"
 )
 
-// Task interface is what must be implemented
+// TaskExecutor interface is what must be implemented
 // for loq to register and execute a defined task
-type Task interface {
-	//Name() string
-	//Id() string
+type TaskExecutor interface {
 	Assert(any) error
-	Execute(string, int) error
+	Execute([]byte) error
 }
 
-// TaskQueue represents a unique task entry
-type TaskQueue struct {
-	queue *Queue
-	task  Task
+func ReadTaskData[T any](jsonData []byte) (T, error) {
+	var opts T
+	err := json.Unmarshal(jsonData, &opts)
+	if err != nil {
+		return opts, err
+	}
+	return opts, nil
+}
+
+// TaskInstance represents a unique task and is represented
+// on a file system as a directory that contains at least a single
+// json file with that task's execution arguments.
+// The task directory can also contain a lock file and/or an
+// error file.
+type TaskInstance struct {
+	task  TaskExecutor
+	root  Path
 	id    string
 	runId int
 	name  string
 }
 
-// Send validates the task options and serializes them to disk.
-func (tq TaskQueue) Send(opt any) error {
-	t := tq.queue.Get(tq.name)
-	if t == nil {
-		return fmt.Errorf("no registered task %s", tq.name)
-	}
-
-	err := t.Assert(opt)
-	if err != nil {
-		return fmt.Errorf("invalid %s task options: %w", tq.name, err)
-	}
-
-	// serialize the tasks arguments to json
-	serializedTaskArgs, err := json.Marshal(opt)
+func (ti TaskInstance) Initialize() error {
+	err := ti.root.MkDirs()
 	if err != nil {
 		return err
 	}
-
-	// TODO should we be using tq.Path() here?
-	qpth, err := tq.queue.makeQueueDir(tq.name, tq.id)
-	if err != nil {
-		return err
-	}
-
-	taskFilePath := path.Join(qpth, tq.TaskFileName())
-	fmt.Printf("TASK ENQUEUED: %s\n", taskFilePath)
-
-	// open file for writing task args
-	file, err := os.Create(taskFilePath)
-	defer func() {
-		_ = file.Close()
-	}()
-
-	if err != nil {
-		return err
-	}
-
-	_, err = file.Write(serializedTaskArgs)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return ti.ApplyLock()
 }
 
-func (tq TaskQueue) Remove() error {
-	return os.RemoveAll(tq.Path())
+func (tq TaskInstance) Remove() error {
+	return tq.root.Remove()
 }
 
-func (tq TaskQueue) Path() string {
-	// TODO: is this necessary - should this be the queue or the task-queue
-	return path.Join(tq.queue.root, tq.name, tq.id)
+func (tq TaskInstance) Exists() bool {
+	return tq.TaskDir().Exists()
 }
 
-func (tq TaskQueue) IsLocked() bool {
-	pth := path.Join(tq.queue.root, tq.name, tq.id, tq.TaskLockFileName())
-	_, err := os.Stat(pth)
-	if err != nil {
-		return false
-	}
-	return true
+func (tq TaskInstance) IsReady() bool {
+	return tq.TaskFile().Exists() && !tq.IsLocked() && !tq.HasError()
 }
 
-func (tq TaskQueue) ApplyLock() error {
-	pth := path.Join(tq.queue.root, tq.name, tq.id, tq.TaskLockFileName())
-	err := os.WriteFile(pth, []byte{}, tq.queue.permission)
+func (tq TaskInstance) IsLocked() bool {
+	return tq.LockFile().Exists()
+}
+
+func (tq TaskInstance) ApplyLock() error {
+	err := tq.LockFile().Write([]byte{})
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (tq TaskQueue) HasError() bool {
-	pth := path.Join(tq.queue.root, tq.name, tq.id, tq.TaskErrorFileName())
-	_, err := os.Stat(pth)
-	if err != nil {
-		return false
-	}
-	return true
+func (tq TaskInstance) ReleaseLock() error {
+	return tq.LockFile().Remove()
 }
 
-func (tq TaskQueue) WriteError(msg string) error {
-	pth := path.Join(tq.queue.root, tq.name, tq.id, tq.TaskErrorFileName())
-	err := os.WriteFile(pth, []byte(msg), tq.queue.permission)
-	if err != nil {
-		return err
-	}
-	return nil
+func (tq TaskInstance) HasError() bool {
+	return tq.ErrorFile().Exists()
 }
 
-func (tq TaskQueue) TaskFileName() string {
-	return fmt.Sprintf("%s.json", tq.id)
+func (tq TaskInstance) WriteError(msg string) error {
+	return tq.ErrorFile().Write([]byte(msg))
 }
 
-func (tq TaskQueue) TaskErrorFileName() string {
-	return fmt.Sprintf("%s.error", tq.id)
+func (tq TaskInstance) TaskDir() Path {
+	return tq.root
 }
 
-func (tq TaskQueue) TaskLockFileName() string {
-	return fmt.Sprintf("%s.lock", tq.id)
+func (tq TaskInstance) TaskFile() Path {
+	return tq.TaskDir().Join(fmt.Sprintf("%s.json", tq.id))
 }
 
-func (tq TaskQueue) Execute(task Task, taskFile string) {
-	err := task.Execute(taskFile, tq.runId)
-	if err != nil {
-		err = tq.WriteError(err.Error())
-		if err != nil {
-			// TODO: must be a better way to recover
-			panic(err)
-		}
-		return
-	}
-	err = tq.Remove()
-	if err != nil {
-		panic(err)
-	}
+func (tq TaskInstance) ErrorFile() Path {
+	return tq.TaskDir().Join(fmt.Sprintf("%s.error", tq.id))
 }
 
-func (tq TaskQueue) String() string {
-	return fmt.Sprintf("%s %s", path.Base(tq.Path()), tq.name)
+func (tq TaskInstance) LockFile() Path {
+	return tq.TaskDir().Join(fmt.Sprintf("%s.lock", tq.id))
 }
 
-// NewTaskQueue initializes a new task with a unique id
-func NewTaskQueue(queue *Queue, taskName string) TaskQueue {
-	return TaskQueue{
-		queue: queue,
-		id:    uuid.New().String(),
-		name:  taskName,
-	}
+//func (tq TaskInstance) Execute(task TaskExecutor, taskFile Path) {
+//	err := task.Execute(taskFile.String(), tq.runId)
+//	if err != nil {
+//		err = tq.WriteError(err.Error())
+//		if err != nil {
+//			// TODO: must be a better way to recover
+//			panic(err)
+//		}
+//		return
+//	}
+//	err = tq.Remove()
+//	if err != nil {
+//		panic(err)
+//	}
+//}
+
+func (tq TaskInstance) String() string {
+	return tq.root.String()
 }
 
-// LoadTaskQueue "loads" a task from disk
-func LoadTaskQueue(queue *Queue, taskPath string, runID int) TaskQueue {
-	taskInstDir := path.Dir(taskPath)
-	taskDir := path.Dir(taskInstDir)
-	taskName := path.Base(taskDir)
-	taskId := path.Base(taskInstDir)
-	return TaskQueue{queue: queue, name: taskName, id: taskId, runId: runID}
-}
-
-// TaskRunner handles assessing the status of a given task. It determines
-// the task's status and will execute if conditions allow (i.e. it's not
-// already locked by another process or has errors.
-type TaskRunner struct {
-	Q            *Queue
-	Id           int
-	LockedTasks  int
-	ErroredTasks int
-}
-
-func (tr *TaskRunner) HandleTaskFile(filePath string, dirEntry fs.DirEntry, err error) error {
-	if path.Ext(filePath) == ".json" {
-		tq := LoadTaskQueue(tr.Q, filePath, tr.Id)
-		if tq.IsLocked() {
-			tr.LockedTasks += 1
-			return fs.SkipDir
-		}
-		err := tq.ApplyLock()
-		if err != nil {
-			return fs.SkipDir
-		}
-
-		if tq.HasError() {
-			tr.ErroredTasks += 1
-			return fs.SkipDir
-		}
-
-		task, ok := tr.Q.tasks[tq.name]
-		if ok {
-			fmt.Printf("TASK RUN %d: %s\n", tr.Id, tq.String())
-			go tq.Execute(task, filePath)
-			fmt.Printf("TASK SUB %d: %s\n", tr.Id, tq.String())
-		}
-	}
-	return nil
-}
+//type TaskFinder interface {
+//	Tasks() []TaskInstance
+//	Handler(Path, fs.FileInfo, error) error
+//}
+//
+//// TaskRunner handles assessing the status of a given task. It determines
+//// the task's status and will execute if conditions allow (i.e. it's not
+//// already locked by another process or has errors.
+//type TaskRunner struct {
+//	Q            *MasterQ
+//	Id           int
+//	LockedTasks  int
+//	ErroredTasks int
+//}
+//
+//func (tr *TaskRunner) Tasks() []TaskExecutor {
+//	return nil
+//}
+//
+//func (tr *TaskRunner) Handler(filePath Path, fileInfo fs.FileInfo, err error) error {
+//	isDir, err := filePath.IsDir()
+//	if err != nil {
+//		return err
+//	}
+//	if isDir {
+//		return nil
+//	}
+//
+//	if strings.HasSuffix(filePath.Name(), ".json") {
+//		tq := LoadTaskQueue(tr.Q, filePath, tr.Id)
+//		if tq.IsLocked() {
+//			tr.LockedTasks += 1
+//			return fs.SkipDir
+//		}
+//		err := tq.ApplyLock()
+//		if err != nil {
+//			return fs.SkipDir
+//		}
+//
+//		if tq.HasError() {
+//			tr.ErroredTasks += 1
+//			return fs.SkipDir
+//		}
+//
+//		task, ok := tr.Q.tasks[tq.name]
+//		if ok {
+//			fmt.Printf("TASK RUN %d: %s\n", tr.Id, tq.String())
+//			go tq.Execute(task, filePath)
+//			fmt.Printf("TASK SUB %d: %s\n", tr.Id, tq.String())
+//		}
+//	}
+//	return nil
+//}
+//
+//// ErroredTaskFinder collects all tasks that have errored.
+//type ErroredTaskFinder struct {
+//	Q     *MasterQ
+//	tasks []TaskInstance
+//}
+//
+//func (tf *ErroredTaskFinder) Tasks() []TaskInstance {
+//	return tf.tasks
+//}
+//
+//func (tf *ErroredTaskFinder) Handler(filePath Path, fileInfo fs.FileInfo, err error) error {
+//	isDir, err := filePath.IsDir()
+//	if err != nil {
+//		return err
+//	}
+//	if isDir {
+//		return nil
+//	}
+//
+//	if strings.HasSuffix(filePath.Name(), ".error") {
+//		tq := LoadTaskQueue(tf.Q, filePath, 0)
+//		tf.tasks = append(tf.tasks, tq)
+//	}
+//	return nil
+//}
+//
+//// OrphanedTaskFinder collects all tasks that have a lock file
+//// that is older than the number seconds in MaxAge.
+//type OrphanedTaskFinder struct {
+//	Q      *MasterQ
+//	MaxAge float64
+//	tasks  []TaskInstance
+//}
+//
+//func (tf *OrphanedTaskFinder) Tasks() []TaskInstance {
+//	return tf.tasks
+//}
+//
+//func (tf *OrphanedTaskFinder) Handler(filePath Path, fileInfo fs.FileInfo, err error) error {
+//	isDir, err := filePath.IsDir()
+//	if err != nil {
+//		return err
+//	}
+//	if isDir {
+//		return nil
+//	}
+//
+//	if strings.HasSuffix(filePath.Name(), ".lock") {
+//		fileInfo, err := filePath.Stat()
+//		if err != nil {
+//			return err
+//		}
+//
+//		fileAge := time.Now().Sub(fileInfo.ModTime())
+//
+//		if fileAge.Seconds() < tf.MaxAge {
+//			return fs.SkipDir
+//		}
+//
+//		tq := LoadTaskQueue(tf.Q, filePath, 0)
+//		tf.tasks = append(tf.tasks, tq)
+//	}
+//	return nil
+//}
