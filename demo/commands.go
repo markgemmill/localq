@@ -5,7 +5,6 @@ import (
 	"github.com/markgemmill/localq/queue"
 	"os"
 	"time"
-	"github.com/markgemmill/localq/queue"
 )
 
 type DemoOptions struct {
@@ -67,7 +66,7 @@ func FindCommand(options DemoOptions) {
 		fmt.Println(err)
 		os.Exit(1)
 	}
-	finder := queue.OrphanedTaskFinder{}
-	err = tasks.FindTasks(finder)
-	for _, task := tasks.FindTasks(finder)
+	//finder := queue.OrphanedTaskFinder{}
+	//err = tasks.FindTasks(finder)
+	//for _, task := tasks.FindTasks(finder)
 }

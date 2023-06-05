@@ -6,17 +6,6 @@ import (
 	"os"
 )
 
-//// GetTaskName generates the unique name of a TaskExecutor that the
-//// MasterQ uses to register and retrieve the instance.
-//func GetTaskName(task TaskExecutor) string {
-//	name := reflect.TypeOf(task).String()
-//	name = strings.ToLower(name)
-//	name = strings.Replace(name, "-", "_", -1)
-//	name = strings.Replace(name, ".", "_", -1)
-//	name = strings.Replace(name, "*", "", -1)
-//	return name
-//}
-
 // MasterQ has two tasks: first, it's a repository of registered task
 // instances; second, it's the primary interface to the file system
 // saving and retrieving of task execution instances.
@@ -37,6 +26,7 @@ func init() {
 // create a new queue and register it.
 // **rootDir** must be a valid path.
 func New(root string, fs afero.Fs, perm os.FileMode) (*MasterQ, error) {
+
 	rootDir := NewPath(root, fs, perm)
 	rootDir = rootDir.Resolve()
 
@@ -54,6 +44,7 @@ func New(root string, fs afero.Fs, perm os.FileMode) (*MasterQ, error) {
 	}
 
 	newMasterQ := &MasterQ{
+		fs:         fs,
 		root:       rootDir,
 		tasks:      make(map[string]TaskQueue, 0),
 		permission: perm,
@@ -69,16 +60,25 @@ func (q *MasterQ) Has(name string) bool {
 	return ok
 }
 
-func (q *MasterQ) Get(name string) TaskQueue {
+func (q *MasterQ) Get(name string) (TaskQueue, error) {
 	t, ok := q.tasks[name]
 	if ok {
-		return t
+		return t, nil
 	}
-	return TaskQueue{}
+	return TaskQueue{}, fmt.Errorf("task '%s' is not registered", name)
+}
+
+func (q *MasterQ) Enqueue(name string) TaskQueue {
+	taskQ, err := q.Get(name)
+	if err != nil {
+		// TODO: yeah, really?
+		panic(err)
+	}
+	return taskQ
 }
 
 // Register the given instance of the task interface. The task is registered
-// by the derrived name
+// by the derrived name.
 func (q *MasterQ) Register(task TaskExecutor, name string) error {
 	//name := GetTaskName(task)
 	_, ok := q.tasks[name]
@@ -94,52 +94,23 @@ func (q *MasterQ) Register(task TaskExecutor, name string) error {
 	return nil
 }
 
-func (q *MasterQ) Enqueue(name string) TaskQueue {
-	taskQ, ok := q.tasks[name]
-	if !ok {
-		panic(fmt.Errorf("task '%s' is not registered!", name))
+func (q *MasterQ) RunAllTasks() []error {
+	var errors []error
+	c := make(chan ExecuteTaskErr, 5)
+	for name, queue := range q.tasks {
+		fmt.Println(name)
+		tasks, err := queue.GetTaskInstances()
+		if err != nil {
+			errors = append(errors, err)
+			continue
+		}
+		for _, task := range tasks {
+			if !task.IsReady() {
+				continue
+			}
+			go ExecuteTask(queue.task, task, c)
+		}
 	}
-	return taskQ
+	close(c)
+	return UnwrapChannel(c)
 }
-
-//func (q *MasterQ) RunAllTasks(runId int) {
-//	walk, err := pathlib.NewWalkWithOpts(q.root, &pathlib.WalkOpts{
-//		Depth:           -1,
-//		Algorithm:       pathlib.AlgorithmBasic,
-//		FollowSymlinks:  false,
-//		MinimumFileSize: -1,
-//		MaximumFileSize: -1,
-//		VisitFiles:      true,
-//		VisitDirs:       true,
-//		VisitSymlinks:   false,
-//	})
-//
-//	runner := TaskRunner{Q: q, Id: runId}
-//	err = walk.Walk(runner.Handler)
-//
-//	if err != nil {
-//		fmt.Println(err)
-//	}
-//}
-
-//func (q *MasterQ) FindTasks(finder TaskFinder) []TaskInstance {
-//	walk, err := pathlib.NewWalkWithOpts(q.root, &pathlib.WalkOpts{
-//		Depth:           -1,
-//		Algorithm:       pathlib.AlgorithmBasic,
-//		FollowSymlinks:  false,
-//		MinimumFileSize: -1,
-//		MaximumFileSize: -1,
-//		VisitFiles:      true,
-//		VisitDirs:       true,
-//		VisitSymlinks:   false,
-//	})
-//
-//	err = walk.Walk(finder.Handler)
-//
-//	if err != nil {
-//		fmt.Println(err)
-//		os.Exit(0)
-//	}
-//
-//	return finder.Tasks()
-//}

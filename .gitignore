@@ -5,3 +5,4 @@ dist
 *.sh
 workbench
 cover.out
+.coverage.out

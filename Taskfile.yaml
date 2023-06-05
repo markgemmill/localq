@@ -3,6 +3,24 @@
 version: '3'
 
 tasks:
+  lint:
+    dir: ./
+    cmds:
+      - golangci-lint run -vvv queue/...
+
+  test:
+    cmds:
+      - gotestsum -f dots --packages="./..." -- {{.CLI_ARGS}}
+
+  test:name:
+      cmds:
+        - gotestsum -f testname --packages="./..." -- {{.CLI_ARGS}}
+
+  test:coverage:
+    cmds:
+      - go test "./queue" -cover -coverpkg="./queue/..." -coverprofile=.coverage.out
+      - go tool cover -html=.coverage.out
+      -
   build:demo:
     dir: demo
     cmds:

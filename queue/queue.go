@@ -22,6 +22,7 @@ func (tq TaskQueue) Initialize() error {
 	return tq.root.MkDirs()
 }
 
+//nolint:ireturn
 func (tq TaskQueue) Task() TaskExecutor {
 	return tq.task
 }
@@ -32,7 +33,6 @@ func (tq TaskQueue) CreateTaskInstance() TaskInstance {
 		id:   id,
 		name: tq.name,
 		root: tq.root.Join(id),
-		task: tq.task,
 	}
 	return ti
 }
@@ -42,8 +42,25 @@ func (tq TaskQueue) LoadTaskInstance(taskDir Path) TaskInstance {
 		id:   taskDir.Name(),
 		name: taskDir.Parent().Name(),
 		root: taskDir,
-		task: tq.task,
 	}
+}
+
+func (tq TaskQueue) GetTaskInstances() ([]TaskInstance, error) {
+	tasks := []TaskInstance{}
+
+	dirs, err := tq.root.ReadDir()
+	if err != nil {
+		return tasks, err
+	}
+	for _, dir := range dirs {
+		if !dir.IsDir() {
+			continue
+		}
+		fmt.Println(dir.Name())
+		taskInst := tq.LoadTaskInstance(dir)
+		tasks = append(tasks, taskInst)
+	}
+	return tasks, nil
 }
 
 func (tq TaskQueue) IterTaskInstances(handler TaskHandler) error {
@@ -104,40 +121,17 @@ func (tq TaskQueue) Run(opt any) (TaskInstance, error) {
 		return ti, err
 	}
 
-	err = tq.execute(ti)
+	c := make(chan ExecuteTaskErr, 5)
+	ExecuteTask(tq.task, ti, c)
+	close(c)
 
-	if err != nil {
-		return ti, err
+	errors := UnwrapChannel(c)
+
+	if errors != nil {
+		return ti, errors[0]
 	}
 
 	return ti, nil
-}
-
-func (tq TaskQueue) execute(ti TaskInstance) error {
-	ti.LockFile()
-	defer func() {
-		// TODO: returning from a defer???
-		_ = ti.ReleaseLock()
-	}()
-
-	data, err := ti.TaskFile().Read()
-	if err != nil {
-		return err
-	}
-	err = tq.task.Execute(data)
-	if err != nil {
-		err = ti.WriteError(err.Error())
-		if err != nil {
-			// TODO: must be a better way to recover
-			panic(err)
-		}
-		return nil
-	}
-	err = ti.Remove()
-	if err != nil {
-		panic(err)
-	}
-	return nil
 }
 
 func NewTaskQueue(master Path, name string, task TaskExecutor) (TaskQueue, error) {
